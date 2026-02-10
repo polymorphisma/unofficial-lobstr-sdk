@@ -23,8 +23,8 @@ dependencies = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/YOUR_USERNAME/lobster-sdk"
-"Bug Tracker" = "https://github.com/YOUR_USERNAME/lobster-sdk/issues"
+"Homepage" = "https://github.com/polymorphisma/unofficial-lobstr-sdk"
+"Bug Tracker" = "https://github.com/polymorphisma/unofficial-lobstr-sdk/issues"
 
 
 [tool.hatch.build.targets.wheel]

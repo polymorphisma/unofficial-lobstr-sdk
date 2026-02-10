@@ -223,7 +223,10 @@ class Lobstr:
         sync: bool = True,
         concurrency: int = 1,
     ) -> Union[ScrapeResult, Run]:
-        """High-level scrape: create squid, add tasks, run, poll, download.
+        """High-level scrape: reuse or create squid, add tasks, run, poll, download.
+
+        If a squid already exists for *crawler_id* it will be reused (emptied
+        first) so that free-plan slot limits are respected.
 
         Parameters
         ----------
@@ -238,12 +241,18 @@ class Lobstr:
         concurrency:
             Number of concurrent slots for the squid.
         """
-        # 1. Create squid
-        squid = self.create_squid(crawler_id)
-        logger.info("Created squid %s", squid.id)
+        # 1. Reuse existing squid or create a new one
+        existing = self.list_squids(crawler_id=crawler_id)
+        if existing:
+            squid = existing[0]
+            logger.info("Reusing existing squid %s", squid.id)
+            self.empty_squid(squid.id)
+        else:
+            squid = self.create_squid(crawler_id)
+            logger.info("Created squid %s", squid.id)
 
         # 2. Set concurrency
-        if concurrency != 1:
+        if concurrency != squid.concurrency:
             self.update_squid(squid.id, concurrency=concurrency)
 
         # 3. Add tasks

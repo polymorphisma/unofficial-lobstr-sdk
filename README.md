@@ -57,19 +57,19 @@ print(result.file_path)     # path to downloaded CSV
 Install directly from GitHub:
 
 ```bash
-pip install git+https://github.com/YOUR_USERNAME/lobster-sdk.git
+pip install git+https://github.com/polymorphisma/unofficial-lobstr-sdk.git
 ```
 
 Or with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv add git+https://github.com/YOUR_USERNAME/lobster-sdk.git
+uv add git+https://github.com/polymorphisma/unofficial-lobstr-sdk.git
 ```
 
 Or clone and install locally:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/lobster-sdk.git
+git clone https://github.com/polymorphisma/unofficial-lobstr-sdk.git
 cd lobster-sdk
 pip install .
 ```

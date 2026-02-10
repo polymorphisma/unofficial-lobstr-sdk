@@ -385,23 +385,26 @@ class TestDownloadCsv:
 class TestScrapeSync:
     @patch("lobstr.client.requests.get")
     @patch("lobstr.client.time.sleep", return_value=None)
-    def test_full_sync_flow(self, mock_sleep, mock_requests_get, client, tmp_path, monkeypatch):
+    def test_full_sync_flow_no_existing_squid(self, mock_sleep, mock_requests_get, client, tmp_path, monkeypatch):
+        """When no squid exists for the crawler, create a new one."""
         monkeypatch.chdir(tmp_path)
 
         csv_content = "username,followers\ncristiano,600000000\n"
 
         # Build the sequence of session.request responses:
-        # 1. create_squid
-        # 2. add_tasks
-        # 3. start_run
-        # 4. get_run_stats (not done)
-        # 5. get_run_stats (done)
-        # 6. list_runs (export not done)
-        # 7. list_runs (export done)
-        # 8. download_run (get S3 URL)
-        # 9. list_runs (refresh run info)
+        # 1. list_squids (empty — no existing squid)
+        # 2. create_squid
+        # 3. add_tasks
+        # 4. start_run
+        # 5. get_run_stats (not done)
+        # 6. get_run_stats (done)
+        # 7. list_runs (export not done)
+        # 8. list_runs (export done)
+        # 9. download_run (get S3 URL)
+        # 10. list_runs (refresh run info)
         responses = [
-            _json_response({"id": "sq1", "crawler": "c1"}),                          # create_squid
+            _json_response({"data": []}),                                             # list_squids
+            _json_response({"id": "sq1", "crawler": "c1"}),                           # create_squid
             _json_response({"ok": True}),                                             # add_tasks
             _json_response({"id": "run1", "squid": "sq1", "status": "running"}),      # start_run
             _json_response({"is_done": False, "total_results": 0}),                   # get_run_stats
@@ -432,14 +435,60 @@ class TestScrapeSync:
         assert result.file_path == "lobstr_results_run1.csv"
         assert result.run.id == "run1"
 
+    @patch("lobstr.client.requests.get")
+    @patch("lobstr.client.time.sleep", return_value=None)
+    def test_full_sync_flow_reuses_existing_squid(self, mock_sleep, mock_requests_get, client, tmp_path, monkeypatch):
+        """When a squid already exists for the crawler, reuse it."""
+        monkeypatch.chdir(tmp_path)
+
+        csv_content = "username,followers\ncristiano,600000000\n"
+
+        # 1. list_squids (returns existing squid)
+        # 2. empty_squid
+        # 3. add_tasks
+        # 4. start_run
+        # 5. get_run_stats (done immediately)
+        # 6. list_runs (export done)
+        # 7. download_run
+        # 8. list_runs (refresh)
+        responses = [
+            _json_response({"data": [{"id": "sq1", "crawler": "c1", "concurrency": 1}]}),  # list_squids
+            _json_response({}),                                                        # empty_squid
+            _json_response({"ok": True}),                                              # add_tasks
+            _json_response({"id": "run1", "squid": "sq1", "status": "running"}),       # start_run
+            _json_response({"is_done": True, "duration": "00:00:05", "total_results": 1}),  # get_run_stats
+            _json_response({"data": [{"id": "run1", "squid": "sq1", "export_done": True}]}),  # list_runs
+            _json_response({"s3": "https://s3.example.com/out.csv"}),                  # download_run
+            _json_response({"data": [{"id": "run1", "squid": "sq1", "export_done": True, "is_done": True}]}),  # list_runs (refresh)
+        ]
+        client.session.request = MagicMock(side_effect=responses)
+
+        mock_s3_resp = MagicMock()
+        mock_s3_resp.raise_for_status.return_value = None
+        mock_s3_resp.iter_content.return_value = [csv_content.encode()]
+        mock_s3_resp.__enter__ = lambda s: s
+        mock_s3_resp.__exit__ = MagicMock(return_value=False)
+        mock_requests_get.return_value = mock_s3_resp
+
+        result = client.scrape(crawler_id="c1", urls=["https://instagram.com/cristiano"])
+
+        assert isinstance(result, ScrapeResult)
+        assert result.data[0]["username"] == "cristiano"
+        # No create_squid call — verify second call was empty_squid (POST squids/sq1/empty)
+        second_call_url = client.session.request.call_args_list[1][0][1]
+        assert "squids/sq1/empty" in second_call_url
+
     def test_sync_with_concurrency(self, client):
-        """When concurrency != 1, update_squid should be called."""
+        """When concurrency differs from existing squid, update_squid should be called."""
         call_log = []
 
         def mock_request(method, url, **kwargs):
             call_log.append((method, url))
+            # list_squids — no existing squid
+            if method == "GET" and url.endswith("/squids"):
+                return _json_response({"data": []})
             if "squids" in url and method == "POST" and "empty" not in url and url.endswith("/squids"):
-                return _json_response({"id": "sq1", "crawler": "c1"})
+                return _json_response({"id": "sq1", "crawler": "c1", "concurrency": 1})
             if "squids/sq1" in url and method == "POST":
                 return _json_response({"id": "sq1", "crawler": "c1", "concurrency": 3})
             if "tasks" in url:
@@ -453,15 +502,16 @@ class TestScrapeSync:
         # Use sync=False to avoid the polling loop
         run = client.scrape("c1", ["https://example.com"], sync=False, concurrency=3)
         assert isinstance(run, Run)
-        # Verify update_squid was called (the second POST to squids/sq1)
+        # Verify update_squid was called (POST to squids/sq1)
         update_calls = [c for c in call_log if "squids/sq1" in c[1] and c[0] == "POST"]
         assert len(update_calls) == 1
 
 
 class TestScrapeAsync:
-    def test_returns_run_immediately(self, client):
+    def test_returns_run_immediately_no_existing_squid(self, client):
         responses = [
-            _json_response({"id": "sq1", "crawler": "c1"}),      # create_squid
+            _json_response({"data": []}),                         # list_squids (empty)
+            _json_response({"id": "sq1", "crawler": "c1"}),       # create_squid
             _json_response({"ok": True}),                         # add_tasks
             _json_response({"id": "run1", "squid": "sq1"}),       # start_run
         ]
@@ -470,5 +520,18 @@ class TestScrapeAsync:
         result = client.scrape("c1", ["https://example.com"], sync=False)
         assert isinstance(result, Run)
         assert result.id == "run1"
-        # Only 3 API calls: create, tasks, start
-        assert client.session.request.call_count == 3
+        assert client.session.request.call_count == 4
+
+    def test_returns_run_immediately_reuses_squid(self, client):
+        responses = [
+            _json_response({"data": [{"id": "sq1", "crawler": "c1", "concurrency": 1}]}),  # list_squids
+            _json_response({}),                                    # empty_squid
+            _json_response({"ok": True}),                          # add_tasks
+            _json_response({"id": "run1", "squid": "sq1"}),        # start_run
+        ]
+        client.session.request = MagicMock(side_effect=responses)
+
+        result = client.scrape("c1", ["https://example.com"], sync=False)
+        assert isinstance(result, Run)
+        assert result.id == "run1"
+        assert client.session.request.call_count == 4
