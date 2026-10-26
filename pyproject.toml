@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "A Python SDK for Lobstr.io - The easiest way to scrape."
 readme = "README.md"
 authors = [
-    { name = "Your Name", email = "your.email@example.com" }
+    { name = "Shrawan sunar", email = "shrawansunar.6@gmail.com" }
 ]
 requires-python = ">=3.8"
 classifiers = [
